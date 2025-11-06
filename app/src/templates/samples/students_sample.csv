@@ -1,0 +1,4 @@
+lrn,firstName,middleName,lastName,gradeLevel,section,trackStrand,schoolYear,status
+123456789001,Jane,Anne,Doe,11,A,STEM,2025-2026,ACTIVE
+123456789002,John,Edward,Smith,12,B,ABM,2025-2026,ACTIVE
+123456789003,Emily,,Johnson,11,C,HUMSS,2025-2026,ACTIVE
