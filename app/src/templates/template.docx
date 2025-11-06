@@ -1,0 +1,28 @@
+This is a placeholder for the DOCX template. In a real environment, you would upload a .docx file here.
+
+To create the template.docx file:
+1. Create a new Word document
+2. Add the following content with placeholders:
+
+---
+
+TO WHOM IT MAY CONCERN:
+
+This is to certify that {studentName}{withLRN} is currently enrolled for the school year {schoolYear} in this learning institution, as per records on file in this office under {trackAndStrand} specialized in {specialization}.
+
+This further certifies that he/she was a person of good character, and he/she has not violated any of the school rules and regulations. He/she was also cleared of all property responsibility and can get along well with others.
+
+This certification is being issued upon the request of above-mentioned student for {purpose}.
+
+Given this {dateGiven} at Luis Y. Ferrer Jr Senior High School.
+
+
+
+
+{signerName}
+
+{signerPosition}
+
+---
+
+Save this as template.docx in the /templates folder.
