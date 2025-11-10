@@ -310,6 +310,11 @@ export function SettingsPanel() {
       await (window as any).electronAPI.savePrinter(selectedPrinter)
     }
     
+    // Save dbConfig to electron-store if available
+    if (typeof window !== 'undefined' && (window as any).electronAPI && (window as any).electronAPI.saveDbConfig) {
+      await (window as any).electronAPI.saveDbConfig((dbConfig || '').trim())
+    }
+    
     // Persist locally
     const local = JSON.parse(localStorage.getItem('gomis_settings') || '{}')
     local.dbConfig = dbConfig
@@ -320,6 +325,52 @@ export function SettingsPanel() {
 
     toast.success('Settings saved successfully!')
   }
+
+  const backupNow = async () => {
+    try {
+      if (!backupPath) {
+        toast.error('Please select a backup directory path first.')
+        return
+      }
+      const res = await fetch(`${API_URL}/api/backup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destDir: backupPath }),
+      })
+      if (!res.ok) {
+        const msg = await res.text()
+        throw new Error(msg || 'Backup failed')
+      }
+      const data = await res.json()
+      const filePath = data?.path || ''
+      localStorage.setItem('gomis_backup_last_at', String(Date.now()))
+      toast.success(`Backup created${filePath ? `: ${filePath}` : ''}`)
+    } catch (e: any) {
+      toast.error(`Backup failed: ${e?.message || 'Unknown error'}`)
+    }
+  }
+
+  // Automatic backup based on retention settings using system clock
+  useEffect(() => {
+    const interval = setInterval(() => {
+      try {
+        const last = Number(localStorage.getItem('gomis_backup_last_at') || '0')
+        const now = Date.now() // system clock
+        const value = Number(retentionValue || '0')
+        if (!backupPath || !value || isNaN(value) || value <= 0) return
+        let ms = 0
+        if (retentionType === 'days') ms = value * 24 * 60 * 60 * 1000
+        else if (retentionType === 'months') ms = value * 30 * 24 * 60 * 60 * 1000
+        else if (retentionType === 'years') ms = value * 365 * 24 * 60 * 60 * 1000
+        if (ms <= 0) return
+        if (!last || now - last >= ms) {
+          // trigger backup
+          backupNow()
+        }
+      } catch {}
+    }, 60 * 1000) // check every minute
+    return () => clearInterval(interval)
+  }, [backupPath, retentionType, retentionValue])
 
   // Load printers and saved printer preference
   const loadPrinters = async () => {
@@ -354,8 +405,8 @@ export function SettingsPanel() {
   const handleCheckDatabase = async () => {
     try {
       setIsCheckingDb(true)
-      // Set baseUrl to Flask backend
-      const baseUrl = 'http://localhost:5000';
+      // Use current configured base URL (trim trailing slash)
+      const baseUrl = (dbConfig || 'http://localhost:5000').trim().replace(/\/+$/, '')
       const res = await fetch(`${baseUrl}/api/students/count/status/ACTIVE`)
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
       const count = await res.text()
@@ -821,14 +872,19 @@ export function SettingsPanel() {
                 </Select>
               </div>
               <p className="text-xs text-muted-foreground">
-                Data will be retained for {retentionValue} {retentionType}
+                Data will be retained for {retentionValue} {retentionType}. Uses system clock ({new Date().toLocaleString()}).
               </p>
             </div>
             <Separator />
-            <Button onClick={handleSaveSettings} className="gap-2">
-              <Save className="h-4 w-4" />
-              Save Data Settings
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={handleSaveSettings} className="gap-2">
+                <Save className="h-4 w-4" />
+                Save Data Settings
+              </Button>
+              <Button type="button" variant="outline" onClick={backupNow} className="gap-2">
+                Backup Now
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

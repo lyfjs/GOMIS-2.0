@@ -29,6 +29,35 @@ export default function App() {
     setIsAuthenticated(!!user)
   }, [])
 
+  // Hash-based routing support
+  useEffect(() => {
+    // Initialize from hash if present
+    const hash = window.location.hash.slice(1) // Remove #
+    if (hash) {
+      setActiveSection(hash)
+    }
+
+    // Listen for hash changes
+    const handleHashChange = () => {
+      const newHash = window.location.hash.slice(1)
+      if (newHash) {
+        setActiveSection(newHash)
+      }
+    }
+
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
+
+  // Update hash when activeSection changes (but avoid infinite loop)
+  useEffect(() => {
+    const currentHash = window.location.hash.slice(1)
+    if (activeSection && currentHash !== activeSection) {
+      // Use replaceState to avoid adding to history
+      window.history.replaceState(null, '', `#${activeSection}`)
+    }
+  }, [activeSection])
+
   type Crumb = { title: string; isActive: boolean }
   const getBreadcrumbItems = (): Crumb[] => {
     const parts = activeSection.split('-')
