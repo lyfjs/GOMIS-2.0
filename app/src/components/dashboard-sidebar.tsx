@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ClipboardList,
   Settings,
+  MessageSquare,
   ChevronDown,
   GraduationCap
 } from 'lucide-react'
@@ -58,7 +59,8 @@ const menuItems = [
     id: 'students',
     children: [
       { title: 'Create Student', id: 'create-student' },
-      { title: 'Student Data', id: 'student-data' }
+      { title: 'Student Data', id: 'student-data' },
+      { title: 'Dropped Students', id: 'dropped-students' }
     ]
   },
   {
@@ -170,14 +172,33 @@ export function DashboardSidebar({ activeSection, onSectionChange }: DashboardSi
       </SidebarContent>
 
       <SidebarFooter>
+        
         <SidebarMenu>
           <SidebarMenuItem>
+            
             <SidebarMenuButton
               onClick={() => onSectionChange('settings')}
               className={activeSection === 'settings' ? 'bg-sidebar-accent' : ''}
             >
               <Settings className="h-4 w-4" />
               <span>Settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={() => {
+                // Navigate to settings and request opening the feedback dialog
+                onSectionChange('settings')
+                try {
+                  window.location.hash = 'settings'
+                } catch {}
+                try {
+                  window.dispatchEvent(new CustomEvent('gomis:open-feedback-dialog'))
+                } catch {}
+              }}
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>Feedback Report</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

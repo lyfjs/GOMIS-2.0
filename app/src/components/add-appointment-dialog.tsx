@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, FormEvent, ChangeEvent } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -7,9 +7,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog'
 import { Calendar } from './ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
-import { CalendarIcon, Plus } from 'lucide-react'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from './ui/command'
+import { CalendarIcon, Plus, User, Check, ChevronsUpDown } from 'lucide-react'
 import { cn } from './ui/utils'
 import { createAppointment } from '../lib/api.appointments'
+import { listStudents, StudentDTO } from '../lib/api.students'
 import { toast } from 'sonner'
 
 // Simple date formatting function to avoid external dependencies
@@ -33,9 +35,20 @@ interface AddAppointmentDialogProps {
   onAppointmentAdd: (appointment: any) => void
 }
 
+function getStudentDisplayName(student: StudentDTO): string {
+  const firstName = student.firstName || ''
+  const lastName = student.lastName || ''
+  const middleName = student.middleName || ''
+  const middleInitial = middleName ? `${middleName.charAt(0).toUpperCase()}. ` : ''
+  return `${firstName} ${middleInitial}${lastName}`.trim()
+}
+
 export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [date, setDate] = useState<Date>()
+  const [students, setStudents] = useState<StudentDTO[]>([])
+  const [studentSearchOpen, setStudentSearchOpen] = useState(false)
+  const [selectedStudent, setSelectedStudent] = useState<StudentDTO | null>(null)
   const [formData, setFormData] = useState({
     title: '',
     consultationType: '',
@@ -43,9 +56,20 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
     status: 'Scheduled',
     notes: '',
     participantName: '',
-    participantType: 'STUDENT',
-    participantLRN: ''
+    participantType: 'STUDENT'
   })
+
+  // Load students when dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      listStudents()
+        .then(setStudents)
+        .catch(() => {
+          setStudents([])
+          toast.error('Failed to load students')
+        })
+    }
+  }, [isOpen])
 
   const consultationTypes = [
     'Academic Counseling',
@@ -63,10 +87,16 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
     '15:00', '15:30', '16:00', '16:30'
   ]
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     
-    if (!date || !formData.title || !formData.consultationType || !formData.time || !formData.participantName || (formData.participantType === 'STUDENT' && !formData.participantLRN)) {
+    if (!date || !formData.title || !formData.consultationType || !formData.time || !formData.participantName) {
+      toast.error('Please fill in all required fields')
+      return
+    }
+
+    if (formData.participantType === 'STUDENT' && !selectedStudent) {
+      toast.error('Please select a student')
       return
     }
 
@@ -79,7 +109,7 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
         consultationType: formData.consultationType,
         participantName: formData.participantName,
         participantType: formData.participantType as any,
-        participantLRN: formData.participantType === 'STUDENT' ? formData.participantLRN : undefined,
+        participantLRN: formData.participantType === 'STUDENT' && selectedStudent ? selectedStudent.lrn : undefined,
         notes: formData.notes || undefined,
         status: 'SCHEDULED' as const,
       }
@@ -99,14 +129,14 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
       status: 'Scheduled',
       notes: '',
       participantName: '',
-      participantType: 'STUDENT',
-      participantLRN: ''
+      participantType: 'STUDENT'
     })
+    setSelectedStudent(null)
     setDate(undefined)
     setIsOpen(false)
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData(prev => ({
       ...prev,
       [e.target.name]: e.target.value
@@ -118,6 +148,23 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
       ...prev,
       [name]: value
     }))
+    // Reset student selection when participant type changes
+    if (name === 'participantType') {
+      setSelectedStudent(null)
+      setFormData(prev => ({
+        ...prev,
+        participantName: ''
+      }))
+    }
+  }
+
+  const handleStudentSelect = (student: StudentDTO) => {
+    setSelectedStudent(student)
+    setFormData(prev => ({
+      ...prev,
+      participantName: getStudentDisplayName(student)
+    }))
+    setStudentSearchOpen(false)
   }
 
   return (
@@ -206,18 +253,6 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="participantName">Participant Name *</Label>
-              <Input
-                id="participantName"
-                name="participantName"
-                placeholder="Enter participant name"
-                value={formData.participantName}
-                onChange={handleChange}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
               <Label htmlFor="participantType">Participant Type</Label>
               <Select value={formData.participantType} onValueChange={(value) => handleSelectChange('participantType', value)}>
                 <SelectTrigger>
@@ -232,22 +267,76 @@ export function AddAppointmentDialog({ onAppointmentAdd }: AddAppointmentDialogP
                 </SelectContent>
               </Select>
             </div>
-          </div>
 
-          {formData.participantType === 'STUDENT' && (
-            <div className="space-y-2">
-              <Label htmlFor="participantLRN">Participant LRN *</Label>
-              <Input
-                id="participantLRN"
-                name="participantLRN"
-                placeholder="Enter 12-digit LRN"
-                value={formData.participantLRN}
-                onChange={handleChange}
-                pattern="\\d{12}"
-                required
-              />
-            </div>
-          )}
+            {formData.participantType === 'STUDENT' ? (
+              <div className="space-y-2">
+                <Label>Student Name *</Label>
+                <Popover open={studentSearchOpen} onOpenChange={setStudentSearchOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={studentSearchOpen}
+                      className="w-full justify-between"
+                    >
+                      {selectedStudent ? getStudentDisplayName(selectedStudent) : "Select student..."}
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-full p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search by name or LRN..." />
+                      <CommandList>
+                        <CommandEmpty>No students found.</CommandEmpty>
+                        <CommandGroup>
+                          {students
+                            .filter(s => s.status === 'ACTIVE')
+                            .sort((a, b) => {
+                              const nameA = getStudentDisplayName(a).toLowerCase()
+                              const nameB = getStudentDisplayName(b).toLowerCase()
+                              return nameA.localeCompare(nameB)
+                            })
+                            .map((student) => (
+                              <CommandItem
+                                key={student.lrn}
+                                value={`${getStudentDisplayName(student)} ${student.lrn}`}
+                                onSelect={() => handleStudentSelect(student)}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    selectedStudent?.lrn === student.lrn ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                <User className="h-4 w-4 mr-2" />
+                                <div>
+                                  <p>{getStudentDisplayName(student)}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    LRN: {student.lrn} • Grade {student.gradeLevel || ''} - {student.section || ''}
+                                  </p>
+                                </div>
+                              </CommandItem>
+                            ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="participantName">Participant Name *</Label>
+                <Input
+                  id="participantName"
+                  name="participantName"
+                  placeholder="Enter participant name"
+                  value={formData.participantName}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+            )}
+          </div>
 
           <div className="space-y-2">
             <Label htmlFor="notes">Notes</Label>
