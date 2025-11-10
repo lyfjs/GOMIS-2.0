@@ -8,10 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Calendar } from './ui/calendar'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Textarea } from './ui/textarea'
-import { CalendarIcon, Printer, FileText } from 'lucide-react'
+import { CalendarIcon, Printer, FileText, AlertTriangle } from 'lucide-react'
 import { cn } from './ui/utils'
 import { toast } from 'sonner'
 import { listUsers, UserDTO } from '../lib/api.users'
+import { listViolationsByStudent } from '../lib/api.violations'
+import { listIncidents, IncidentDTO } from '../lib/api.incidents'
+import { Alert, AlertDescription } from './ui/alert'
 
 interface GoodMoralCertificateDialogProps {
   student: any
@@ -24,6 +27,8 @@ export function GoodMoralCertificateDialog({ student, open, onOpenChange }: Good
   const [purpose, setPurpose] = useState('')
   const [dateGiven, setDateGiven] = useState<Date | undefined>(new Date())
   const [selectedSigner, setSelectedSigner] = useState('')
+  const [hasUnresolvedIssues, setHasUnresolvedIssues] = useState(false)
+  const [checkingIssues, setCheckingIssues] = useState(true)
 
   const [adminUsers, setAdminUsers] = useState<UserDTO[]>([])
 
@@ -43,6 +48,46 @@ export function GoodMoralCertificateDialog({ student, open, onOpenChange }: Good
       }
     })()
   }, [open])
+
+  // Check for unresolved issues when dialog opens
+  useEffect(() => {
+    if (!open || !student?.id) {
+      setHasUnresolvedIssues(false)
+      setCheckingIssues(false)
+      return
+    }
+
+    setCheckingIssues(true)
+    ;(async () => {
+      try {
+        // Check for unresolved violations
+        const violations = await listViolationsByStudent(Number(student.id))
+        const unresolvedViolations = violations.filter(
+          v => v.status !== 'Resolved' && v.status !== 'Appealed'
+        )
+
+        // Check for unresolved incidents (where student is the reporter)
+        const allIncidents = await listIncidents()
+        const studentLRN = student.lrn
+        const unresolvedIncidents = allIncidents.filter(
+          (inc: IncidentDTO) => {
+            const isReporter = inc.reportedByLRN === studentLRN || 
+                              inc.reportedBy?.toLowerCase().includes(student.firstName?.toLowerCase() || '') ||
+                              inc.reportedBy?.toLowerCase().includes(student.lastName?.toLowerCase() || '')
+            return isReporter && inc.status !== 'Resolved' && inc.status !== 'Dismissed'
+          }
+        )
+
+        setHasUnresolvedIssues(unresolvedViolations.length > 0 || unresolvedIncidents.length > 0)
+      } catch (error) {
+        console.error('Error checking unresolved issues:', error)
+        // On error, allow printing (fail open)
+        setHasUnresolvedIssues(false)
+      } finally {
+        setCheckingIssues(false)
+      }
+    })()
+  }, [open, student])
 
   // Auto-populate student data
   const studentFullName = student ? `${student.firstName} ${student.middleName || ''} ${student.lastName}`.replace(/\s+/g, ' ').trim() : ''
@@ -108,53 +153,128 @@ export function GoodMoralCertificateDialog({ student, open, onOpenChange }: Good
     return `${day}${getDaySuffix(day)} of ${month} ${year}`
   }
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const lrnSection = includeLRN ? `, bearing LRN ${lrnText},` : ''
     const formattedDate = formatDateGiven(dateGiven)
     const signer = adminUsers.find(u => (u as any).email === selectedSigner)
     const signerName = signer ? `${(signer as any).firstName} ${(signer as any).lastName}` : ''
     const signerPosition = signer ? formatPositionLabel(signer) : ''
 
-    const certificateContent = `
-TO WHOM IT MAY CONCERN:
+    try {
+      // Use the exact same logic as DOCX export
+      const PizZip = (await import('pizzip')).default
+      const Docxtemplater = (await import('docxtemplater')).default
 
-This is to certify that ${studentFullName}${lrnSection} is currently enrolled for the school year ${schoolYear} in this learning institution, as per records on file in this office under ${trackStrand} specialized in ${specialization}.
+      const templateUrl = new URL('../templates/binary/good_moral_template.zip', import.meta.url)
+      const response = await fetch(templateUrl)
+      if (!response.ok) {
+        throw new Error('Binary template not found. Ensure good_moral_template.zip exists under src/templates/binary')
+      }
+      const templateBuffer = await response.arrayBuffer()
 
-This further certifies that he/she was a person of good character, and he/she has not violated any of the school rules and regulations. He/she was also cleared of all property responsibility and can get along well with others.
+      const zip = new PizZip(templateBuffer)
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: { start: '${', end: '}' },
+      })
 
-This certification is being issued upon the request of above-mentioned student for ${purpose}.
+      // Render with the same data as export
+      doc.render({
+        studentName: studentFullName,
+        withLRN: lrnSection,
+        schoolYear: schoolYear,
+        trackAndStrand: trackStrand,
+        specialization: specialization,
+        purpose: purpose,
+        formatDateGiven: formattedDate,
+        certificateSigner: signerName,
+        signerPosition: signerPosition,
+      })
 
-Given this ${formattedDate} at Luis Y. Ferrer Jr Senior High School.
+      // Generate the DOCX blob (same as export)
+      const docxBlob = doc.getZip().generate({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      })
 
+      // Convert blob to array buffer for Electron IPC
+      const arrayBuffer = await docxBlob.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      const buffer = Array.from(uint8Array)
+      
+      const filename = `Good_Moral_Certificate_${studentFullName.replace(/\s+/g, '_')}.docx`
 
+      // Check if we're in Electron environment
+      if (typeof window !== 'undefined' && (window as any).electronAPI) {
+        // Use Electron IPC to save and print
+        const result = await (window as any).electronAPI.saveAndPrintDocx({
+          buffer: buffer,
+          filename: filename
+        })
+        
+        if (result.success) {
+          toast.success('Certificate saved and opened for printing.')
+        } else {
+          toast.error('Failed to save certificate. ' + (result.error || ''))
+        }
+      } else {
+        // Fallback: convert to HTML and print in browser
+        const mammoth = await import('mammoth')
+        const result = await mammoth.default.convertToHtml(
+          { arrayBuffer },
+          {
+            styleMap: [
+              "p[style-name='Heading 1'] => h1:fresh",
+              "p[style-name='Heading 2'] => h2:fresh",
+            ],
+            convertImage: mammoth.default.images.imgElement(async (image) => {
+              try {
+                const imageBuffer = await image.read()
+                const uint8Array = new Uint8Array(imageBuffer)
+                let binary = ''
+                for (let i = 0; i < uint8Array.length; i++) {
+                  binary += String.fromCharCode(uint8Array[i])
+                }
+                const base64 = btoa(binary)
+                const mimeType = image.contentType || 'image/png'
+                return { src: `data:${mimeType};base64,${base64}` }
+              } catch (err) {
+                console.warn('Error converting image:', err)
+                return { src: '' }
+              }
+            })
+          }
+        )
 
-${signerName}
-${signerPosition}
-    `
-
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Certificate of Good Moral Character</title>
-            <style>
-              @page { margin: 1in; }
-              body { font-family: 'Times New Roman', serif; font-size: 12pt; line-height: 1.8; padding: 40px; }
-              .certificate { white-space: pre-wrap; }
-              @media print { button { display: none; } }
-            </style>
-          </head>
-          <body>
-            <div class="certificate">${certificateContent}</div>
-            <button onclick="window.print()" style="margin-top: 20px; padding: 10px 20px;">Print</button>
-          </body>
-        </html>
-      `)
-      printWindow.document.close()
+        const printWindow = window.open('', '_blank')
+        if (printWindow) {
+          printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>Certificate of Good Moral Character - Print</title>
+                <style>
+                  @page { margin: 1in; size: letter; }
+                  body { font-family: 'Times New Roman', serif; font-size: 12pt; line-height: 1.8; padding: 40px; max-width: 8.5in; margin: 0 auto; }
+                  img { max-width: 100%; height: auto; }
+                  @media print { body { padding: 0; } }
+                </style>
+              </head>
+              <body>${result.value}</body>
+            </html>
+          `)
+          printWindow.document.close()
+          setTimeout(() => {
+            printWindow.print()
+          }, 250)
+        }
+        toast.success('Opening print dialog...')
+      }
+    } catch (error) {
+      console.error('Error generating certificate for printing:', error)
+      toast.error('Failed to generate certificate. Please try exporting as DOCX instead.')
     }
-    
-    toast.success('Opening print preview...')
   }
 
   const handleExportDocx = async () => {
@@ -335,6 +455,24 @@ ${signerPosition}
             </Select>
           </div>
 
+          {/* Unresolved Issues Warning */}
+          {hasUnresolvedIssues && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                This student has unresolved violations or incidents. A Certificate of Good Moral Character cannot be issued until all issues are resolved.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {checkingIssues && (
+            <Alert>
+              <AlertDescription>
+                Checking for unresolved issues...
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Preview section */}
           <div className="border rounded-md p-6 bg-muted/30 space-y-3">
             <h4 className="text-center font-medium">Certificate Preview</h4>
@@ -372,7 +510,7 @@ ${signerPosition}
               variant="outline" 
               className="flex-1 gap-2"
               onClick={handlePrint}
-              disabled={!purpose || !dateGiven || !selectedSigner}
+              disabled={!purpose || !dateGiven || !selectedSigner || hasUnresolvedIssues || checkingIssues}
             >
               <Printer className="h-4 w-4" />
               Print Certificate
@@ -380,7 +518,7 @@ ${signerPosition}
             <Button 
               className="flex-1 gap-2"
               onClick={handleExportDocx}
-              disabled={!purpose || !dateGiven || !selectedSigner}
+              disabled={!purpose || !dateGiven || !selectedSigner || hasUnresolvedIssues || checkingIssues}
             >
               <FileText className="h-4 w-4" />
               Export as DOCX

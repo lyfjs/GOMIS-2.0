@@ -74,6 +74,9 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
   const [onlyWithViolations, setOnlyWithViolations] = useState(false)
   const [violationDateFilter, setViolationDateFilter] = useState('')
   const [studentsWithViolations, setStudentsWithViolations] = useState<number[] | null>(null)
+  const [selectedDroppedStudent, setSelectedDroppedStudent] = useState<any>(null)
+  const [violationsForDroppedStudent, setViolationsForDroppedStudent] = useState<ViolationDTO[] | null>(null)
+  const [droppedStudentDialogOpen, setDroppedStudentDialogOpen] = useState(false)
 
   // Load data from backend on component mount
   useEffect(() => {
@@ -596,7 +599,7 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
               <p className="text-sm text-muted-foreground mb-4">
                 View appointments, sessions, and incidents on a unified calendar with color-coded markers.
               </p>
-              <Button variant="outline" className="w-full">
+              <Button variant="outline" className="w-full" onClick={() => { window.location.hash = 'appointments-calendar' }}>
                 View Calendar
               </Button>
             </CardContent>
@@ -614,7 +617,7 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
               <p className="text-sm text-muted-foreground mb-4">
                 View and edit all scheduled appointments. Update times, details, or cancel appointments.
               </p>
-              <Button variant="outline" className="w-full">
+              <Button variant="outline" className="w-full" onClick={() => { window.location.hash = 'appointments-schedule' }}>
                 View Schedule
               </Button>
             </CardContent>
@@ -780,6 +783,115 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
       )
     }
 
+    if (activeSection === 'students-dropped-students') {
+      const droppedStudents = students.filter((s: any) => 
+        s.status === 'DROPPED' || s.status === 'Dropped'
+      )
+
+      const handleViewDroppedStudent = async (student: any) => {
+        setSelectedDroppedStudent(student)
+        setViolationsForDroppedStudent(null)
+        setDroppedStudentDialogOpen(true)
+        try {
+          const list = await listViolationsByStudent(Number(student.id))
+          setViolationsForDroppedStudent(list)
+        } catch {
+          setViolationsForDroppedStudent([])
+        }
+      }
+
+      return (
+        <div className="space-y-6">
+          <div className="animate-slide-in-top">
+            <h1>Dropped Students</h1>
+            <p className="text-muted-foreground">View dropped students and their violation records</p>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Dropped Students List</CardTitle>
+              <CardDescription>Click on a student to view their violation records</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {droppedStudents.length > 0 ? (
+                <div className="space-y-2">
+                  {droppedStudents.map((student: any) => (
+                    <div key={student.id} className="flex items-center justify-between p-3 rounded border hover:bg-muted/50">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarFallback>{getStudentInitials(student)}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="text-sm font-medium">{getStudentDisplayName(student)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            Control Number: <span className="font-mono font-semibold">{student.controlNumber || 'N/A'}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            LRN: {student.lrn} • Grade {student.gradeLevel || student.grade || ''} • {student.section || ''}
+                          </div>
+                        </div>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => handleViewDroppedStudent(student)}>
+                        View Violations
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                  <p className="text-sm text-muted-foreground">No dropped students found</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Violations Dialog for Dropped Student */}
+          <Dialog open={droppedStudentDialogOpen} onOpenChange={setDroppedStudentDialogOpen}>
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>
+                  Violations for {selectedDroppedStudent ? getStudentDisplayName(selectedDroppedStudent) : ''}
+                </DialogTitle>
+                <DialogDescription>
+                  Control Number: {selectedDroppedStudent?.controlNumber || 'N/A'} • All violation records for this student
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3">
+                {violationsForDroppedStudent == null ? (
+                  <div className="text-sm text-muted-foreground">Loading...</div>
+                ) : violationsForDroppedStudent.length ? (
+                  <div className="space-y-2">
+                    {violationsForDroppedStudent.map(v => (
+                      <div key={v.id} className="grid grid-cols-[2fr,1fr,1fr,auto] items-center gap-3 p-3 rounded border">
+                        <div>
+                          <div className="text-sm font-medium">{v.violationType}</div>
+                          <div className="text-xs text-muted-foreground">{v.description || ''}</div>
+                        </div>
+                        <div className="text-sm">{v.date}</div>
+                        <div>
+                          <Badge variant={v.severity === 'Severe' ? 'destructive' : v.severity === 'Major' ? 'default' : 'secondary'}>
+                            {v.severity}
+                          </Badge>
+                        </div>
+                        <div>
+                          <Badge variant={v.status === 'Resolved' ? 'default' : v.status === 'Appealed' ? 'secondary' : 'outline'}>
+                            {v.status}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">No violations found for this student.</div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
+      )
+    }
+
     // Default Student Management overview
     return (
     <div className="space-y-6">
@@ -821,7 +933,7 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
           <CardContent>
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Upload a CSV file with headers: lrn, firstName, middleName, lastName, gradeLevel, section, trackStrand, schoolYear, status.
+                Upload a CSV file with headers: LRN, LASTNAME, FIRSTNAME, MIDDLENAME, SEX, BIRHDATE, IP/ETHNICGROUP, RELIGION, SCHOOLNAME, SCHOOLID, SCHOOLREGION, DIVISION, DISTRICT, SEMESTER, SCHOOLYEAR, GRADELEVEL, SECTION, TRACK&STRAND, SPECIALIZATION
               </p>
               <div>
                 <input
@@ -837,35 +949,114 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
                       const text = await file.text()
                       const lines = text.split(/\r?\n/).filter(Boolean)
                       if (!lines.length) return
-                      const headers = lines[0].split(',').map(h => h.trim())
-                      const idx = (name: string) => headers.findIndex(h => h.toLowerCase() === name.toLowerCase())
-                      const newStudents: any[] = []
-                      for (let i = 1; i < lines.length; i++) {
-                        const cols = lines[i].split(',')
-                        if (!cols.length) continue
-                        const payload: any = {
-                          lrn: cols[idx('lrn')]?.trim(),
-                          firstName: cols[idx('firstName')]?.trim(),
-                          middleName: cols[idx('middleName')]?.trim() || undefined,
-                          lastName: cols[idx('lastName')]?.trim(),
-                          gradeLevel: cols[idx('gradeLevel')]?.trim(),
-                          section: cols[idx('section')]?.trim(),
-                          trackStrand: cols[idx('trackStrand')]?.trim(),
-                          schoolYear: cols[idx('schoolYear')]?.trim() || undefined,
-                          status: (cols[idx('status')]?.trim() as any) || 'ACTIVE',
+                      
+                      // Parse CSV header (handling quoted fields)
+                      const parseCSVLine = (line: string): string[] => {
+                        const result: string[] = []
+                        let current = ''
+                        let inQuotes = false
+                        for (let i = 0; i < line.length; i++) {
+                          const char = line[i]
+                          if (char === '"') {
+                            inQuotes = !inQuotes
+                          } else if (char === ',' && !inQuotes) {
+                            result.push(current.trim())
+                            current = ''
+                          } else {
+                            current += char
+                          }
                         }
+                        result.push(current.trim())
+                        return result
+                      }
+                      
+                      const headers = parseCSVLine(lines[0])
+                      const idx = (name: string) => {
+                        const normalized = name.toLowerCase().replace(/\s+/g, '').replace(/[\/&]/g, '')
+                        return headers.findIndex(h => {
+                          const hNormalized = h.toLowerCase().replace(/\s+/g, '').replace(/[\/&]/g, '')
+                          return hNormalized === normalized || hNormalized === name.toLowerCase()
+                        })
+                      }
+                      
+                      const newStudents: any[] = []
+                      let successCount = 0
+                      let errorCount = 0
+                      
+                      for (let i = 1; i < lines.length; i++) {
+                        const cols = parseCSVLine(lines[i])
+                        if (cols.length < headers.length) continue
+                        
+                        // Map SEX to gender (Male/Female -> MALE/FEMALE)
+                        const sexValue = cols[idx('SEX')]?.trim() || ''
+                        const genderMap: Record<string, string> = {
+                          'Male': 'MALE',
+                          'Female': 'FEMALE',
+                          'male': 'MALE',
+                          'female': 'FEMALE',
+                          'MALE': 'MALE',
+                          'FEMALE': 'FEMALE'
+                        }
+                        const gender = genderMap[sexValue] || 'OTHER'
+                        
+                        // Helper to get column value or undefined if empty
+                        const getCol = (name: string) => {
+                          const val = cols[idx(name)]?.trim()
+                          return val && val.length > 0 ? val : undefined
+                        }
+                        
+                        // Handle TRACK&STRAND field (try both variations)
+                        const trackStrandIdx = idx('TRACK&STRAND') >= 0 ? idx('TRACK&STRAND') : idx('TRACKSTRAND')
+                        const trackStrand = trackStrandIdx >= 0 ? cols[trackStrandIdx]?.trim() : undefined
+                        
+                        // Handle IP/ETHNICGROUP field (try both variations)
+                        const ipEthnicIdx = idx('IP/ETHNICGROUP') >= 0 ? idx('IP/ETHNICGROUP') : idx('IPETHNICGROUP')
+                        const ipEthnicGroup = ipEthnicIdx >= 0 ? cols[ipEthnicIdx]?.trim() : undefined
+                        
+                        const payload: any = {
+                          lrn: getCol('LRN'),
+                          lastName: getCol('LASTNAME'),
+                          firstName: getCol('FIRSTNAME'),
+                          middleName: getCol('MIDDLENAME'),
+                          gender: gender,
+                          birthDate: getCol('BIRHDATE'),
+                          ipEthnicGroup: ipEthnicGroup,
+                          religion: getCol('RELIGION'),
+                          schoolName: getCol('SCHOOLNAME'),
+                          schoolId: getCol('SCHOOLID'),
+                          schoolRegion: getCol('SCHOOLREGION'),
+                          division: getCol('DIVISION'),
+                          district: getCol('DISTRICT'),
+                          semester: getCol('SEMESTER'),
+                          schoolYear: getCol('SCHOOLYEAR') || '2024-2025',
+                          gradeLevel: getCol('GRADELEVEL'),
+                          section: getCol('SECTION'),
+                          trackStrand: trackStrand,
+                          specialization: getCol('SPECIALIZATION'),
+                          status: 'ACTIVE',
+                        }
+                        
+                        // Validate required fields
                         if (payload.lrn && payload.firstName && payload.lastName && payload.gradeLevel && payload.section && payload.trackStrand) {
                           try {
                             const created = await createStudent(payload)
                             newStudents.push(created)
-                          } catch {}
+                            successCount++
+                          } catch (err: any) {
+                            errorCount++
+                            console.error('Failed to import student:', payload.lrn, err)
+                          }
+                        } else {
+                          errorCount++
                         }
                       }
-                      if (newStudents.length) {
+                      
+                      if (successCount > 0) {
                         setStudents(prev => [...prev, ...newStudents])
-                        toast.success(`Imported ${newStudents.length} students`)
+                        toast.success(`Imported ${successCount} student(s) successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}`)
+                        emit('data:students')
                       } else {
-                        toast.error('No valid rows imported')
+                        toast.error(`Failed to import students. ${errorCount > 0 ? `${errorCount} row(s) had errors.` : 'No valid data found.'}`)
                       }
                     } else {
                       toast.error('Excel import not available. Please upload CSV.')
@@ -877,7 +1068,7 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
                   Import CSV/Excel
                 </Button>
                 <div className="text-xs text-muted-foreground mt-1">
-                  Download sample: <a href="/src/templates/samples/students_sample.csv" className="underline">students_sample.csv</a>
+                  Download sample: <a href="/src/templates/samples/students_sample.csv" download className="underline">students_sample.csv</a>
                 </div>
               </div>
             </div>
@@ -1373,10 +1564,6 @@ export function DashboardContent({ activeSection }: DashboardContentProps) {
 
     return (
       <div className="space-y-6">
-        <div className="animate-slide-in-top">
-          <h1>Violation Records</h1>
-          <p className="text-muted-foreground">Filter students and view their violations</p>
-        </div>
 
         {/* Filters */}
         <Card>

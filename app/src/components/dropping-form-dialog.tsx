@@ -11,6 +11,7 @@ import { CalendarIcon, Printer, FileText } from 'lucide-react'
 import { cn } from './ui/utils'
 import { toast } from 'sonner@2.0.3'
 import { listUsers, UserDTO } from '../lib/api.users'
+import { listStudents } from '../lib/api.students'
 
 interface DroppingFormDialogProps {
   student: any
@@ -30,6 +31,7 @@ export function DroppingFormDialog({ student, open, onOpenChange, onStudentDrop 
   const [actionTaken, setActionTaken] = useState('')
   const [reasonForDropping, setReasonForDropping] = useState('')
   const [selectedSigner, setSelectedSigner] = useState('')
+  const [controlNumber, setControlNumber] = useState('')
 
   const [adminUsers, setAdminUsers] = useState<UserDTO[]>([])
 
@@ -46,6 +48,42 @@ export function DroppingFormDialog({ student, open, onOpenChange, onStudentDrop 
         }
       } catch {
         setAdminUsers([])
+      }
+    })()
+  }, [open])
+
+  // Generate control number when dialog opens
+  useEffect(() => {
+    if (!open) return
+
+    ;(async () => {
+      try {
+        // Get current date in mm-dd-yy format
+        const now = new Date()
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const day = String(now.getDate()).padStart(2, '0')
+        const year = String(now.getFullYear()).slice(-2)
+        const datePart = `${month}-${day}-${year}`
+
+        // Count dropped students
+        const allStudents = await listStudents()
+        const droppedCount = allStudents.filter((s: any) => 
+          s.status === 'Dropped' || s.status === 'DROPPED'
+        ).length
+
+        // Generate control number: mm-dd-yy-XX (where XX is droppedCount + 1, padded to 2 digits)
+        const sequenceNumber = String(droppedCount + 1).padStart(2, '0')
+        const controlNum = `${datePart}-${sequenceNumber}`
+        setControlNumber(controlNum)
+      } catch (error) {
+        console.error('Error generating control number:', error)
+        // Fallback: use current date and time-based number
+        const now = new Date()
+        const month = String(now.getMonth() + 1).padStart(2, '0')
+        const day = String(now.getDate()).padStart(2, '0')
+        const year = String(now.getFullYear()).slice(-2)
+        const timeBased = String(Math.floor(Date.now() / 1000) % 100).padStart(2, '0')
+        setControlNumber(`${month}-${day}-${year}-${timeBased}`)
       }
     })()
   }, [open])
@@ -111,93 +149,87 @@ export function DroppingFormDialog({ student, open, onOpenChange, onStudentDrop 
     return formattedPosition || formattedSpec
   }
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const signer = adminUsers.find(u => u.email === selectedSigner)
     const signerName = signer ? `${signer.firstName} ${signer.lastName}` : ''
 
-    const formContent = `
-Republic of the Philippines
-Department of Education
+    try {
+      // Use the same logic as DOCX export, then print
+      const PizZip = (await import('pizzip')).default
+      const Docxtemplater = (await import('docxtemplater')).default
 
-Region IV-A CALABARZON
-DIVISION OF GENERAL TRIAS CITY
-LUIS Y. FERRER JR. SENIOR HIGH SCHOOL
-SOUTH SQUARE VILLAGE, PASONG KAWAYAN II, GEN. TRIAS CITY, CAVITE
+      const templateUrl = new URL('../templates/binary/dropping_form_template.zip', import.meta.url)
+      const response = await fetch(templateUrl)
+      if (!response.ok) {
+        throw new Error('Binary template not found. Ensure dropping_form_template.zip exists under src/templates/binary')
+      }
+      const templateBuffer = await response.arrayBuffer()
 
-DROPPING FORM
+      const zip = new PizZip(templateBuffer)
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: { start: '${', end: '}' },
+      })
 
-S.Y. ${schoolYear} / ${semester}
+      // Render with data
+      doc.render({
+        ControlNumber: controlNumber,
+        Date: formatDate(formDate),
+        Name: studentFullName,
+        TrackNStrand: trackStrand,
+        Specialization: specialization,
+        Adviser: adviser,
+        GradeNSection: gradeSection,
+        Inclusive: formatInclusiveDates(),
+        ActionTaken: actionTaken,
+        ReasonForDropping: reasonForDropping,
+        EffectiveDate: formatDate(effectiveDate),
+        UserAccount: signerName,
+      })
 
-DATE: ${formatDate(formDate)}
+      // Generate the DOCX blob
+      const docxBlob = doc.getZip().generate({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      })
 
-NAME OF STUDENT: ${studentFullName}
-TRACK/STRAND SPECIALIZATION: ${trackStrand}
-${specialization}
+      // Convert blob to array buffer for Electron IPC
+      const arrayBuffer = await docxBlob.arrayBuffer()
+      const uint8Array = new Uint8Array(arrayBuffer)
+      const buffer = Array.from(uint8Array)
+      
+      const filename = `Dropping_Form_${studentFullName.replace(/\s+/g, '_')}.docx`
 
-ADVISER: ${adviser}
-GRADE/SECTION: ${gradeSection}
-
-INCLUSIVE DATE OF ABSENCES: ${formatInclusiveDates()}
-
-ACTION TAKEN: ${actionTaken}
-
-REASON FOR DROPPING: ${reasonForDropping}
-
-EFFECTIVE DATE: ${formatDate(effectiveDate)}
-
-
-${studentFullName}
-Student
-
-${adviser}
-Adviser
-
-_____________________
-Parent/Guardian
-
-${signerName}
-Guidance Designate
-
-_____________________
-School Principal II
-    `
-
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>Dropping Form</title>
-            <style>
-              @page {
-                margin: 1in;
-              }
-              body {
-                font-family: Arial, sans-serif;
-                font-size: 11pt;
-                line-height: 1.6;
-                padding: 20px;
-              }
-              .form {
-                white-space: pre-wrap;
-              }
-              @media print {
-                button {
-                  display: none;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="form">${formContent}</div>
-            <button onclick="window.print()" style="margin-top: 20px; padding: 10px 20px;">Print</button>
-          </body>
-        </html>
-      `)
-      printWindow.document.close()
+      // Check if we're in Electron environment
+      if (typeof window !== 'undefined' && (window as any).electronAPI) {
+        // Use Electron IPC to save and print
+        const result = await (window as any).electronAPI.saveAndPrintDocx({
+          buffer: buffer,
+          filename: filename
+        })
+        
+        if (result.success) {
+          toast.success('Dropping form saved and sent to printer.')
+        } else {
+          toast.error('Failed to print dropping form. ' + (result.error || ''))
+        }
+      } else {
+        // Fallback: download the file
+        const url = window.URL.createObjectURL(docxBlob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = filename
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+        toast.success('Dropping form downloaded. Please open and print manually.')
+      }
+    } catch (error) {
+      console.error('Error generating dropping form for printing:', error)
+      toast.error('Failed to generate dropping form. Please try exporting as DOCX instead.')
     }
-    
-    toast.success('Opening print preview...')
   }
 
   const handleExportDocx = async () => {
@@ -224,6 +256,7 @@ School Principal II
 
       // Render with data (v4 API) – match case-sensitive keys in template
       doc.render({
+        ControlNumber: controlNumber,
         Date: formatDate(formDate),
         Name: studentFullName,
         TrackNStrand: trackStrand,
@@ -258,11 +291,23 @@ School Principal II
     }
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    try {
+      // Update student status to DROPPED and save control number
+      const { updateStudent, getStudent } = await import('../lib/api.students')
+      await updateStudent(Number(student.id), {
+        status: 'DROPPED',
+        controlNumber: controlNumber,
+      })
+      
+      // Fetch the updated student from backend to get the saved control number
+      const updatedStudent = await getStudent(Number(student.id))
+      
     // Mark student as dropped
     const droppedStudent = {
-      ...student,
-      status: 'Dropped',
+        ...updatedStudent,
+        status: 'DROPPED',
+        controlNumber: updatedStudent.controlNumber || controlNumber,
       droppedDate: effectiveDate?.toISOString(),
       droppingReason: reasonForDropping,
       droppingDetails: {
@@ -275,13 +320,21 @@ School Principal II
         actionTaken,
         reasonForDropping,
         effectiveDate: effectiveDate?.toISOString(),
-        processedBy: selectedSigner
+          processedBy: selectedSigner,
+          controlNumber: updatedStudent.controlNumber || controlNumber
       }
     }
     
     onStudentDrop(droppedStudent)
+      // Emit event to refresh student list
+      const { emit } = await import('../lib/events')
+      emit('data:students')
     toast.success('Student marked as dropped')
     onOpenChange(false)
+    } catch (error) {
+      console.error('Error dropping student:', error)
+      toast.error('Failed to update student status')
+    }
   }
 
   return (
@@ -297,7 +350,11 @@ School Principal II
         <div className="space-y-6 py-4">
           {/* Form Header */}
           <div className="space-y-4 pb-4 border-b">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Control Number</Label>
+                <Input value={controlNumber} readOnly className="bg-muted font-mono" />
+              </div>
               <div className="space-y-2">
                 <Label>Form Date *</Label>
                 <Popover>
@@ -323,6 +380,8 @@ School Principal II
                   </PopoverContent>
                 </Popover>
               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="schoolYear">School Year *</Label>
                 <Input

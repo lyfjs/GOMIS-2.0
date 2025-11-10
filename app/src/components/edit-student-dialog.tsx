@@ -15,6 +15,10 @@ import { toast } from 'sonner'
 import { updateStudent, deleteStudent as apiDeleteStudent, StudentDTO } from '../lib/api.students'
 import { GoodMoralCertificateDialog } from './good-moral-certificate-dialog'
 import { DroppingFormDialog } from './dropping-form-dialog'
+import { listViolationsByStudent } from '../lib/api.violations'
+import { listIncidents, IncidentDTO } from '../lib/api.incidents'
+import { Alert, AlertDescription } from './ui/alert'
+import { AlertTriangle } from 'lucide-react'
 
 interface EditStudentDialogProps {
   student: any
@@ -29,6 +33,8 @@ export function EditStudentDialog({ student, open, onOpenChange, onStudentUpdate
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showDroppingFormDialog, setShowDroppingFormDialog] = useState(false)
   const [showGoodMoralDialog, setShowGoodMoralDialog] = useState(false)
+  const [hasUnresolvedIssues, setHasUnresolvedIssues] = useState(false)
+  const [checkingIssues, setCheckingIssues] = useState(true)
   const [birthDate, setBirthDate] = useState<Date | undefined>()
   const [formData, setFormData] = useState({
     // Student Information
@@ -99,6 +105,46 @@ export function EditStudentDialog({ student, open, onOpenChange, onStudentUpdate
         setBirthDate(new Date(student.birthDate))
       }
     }
+  }, [open, student])
+
+  // Check for unresolved issues when dialog opens
+  useEffect(() => {
+    if (!open || !student?.id) {
+      setHasUnresolvedIssues(false)
+      setCheckingIssues(false)
+      return
+    }
+
+    setCheckingIssues(true)
+    ;(async () => {
+      try {
+        // Check for unresolved violations
+        const violations = await listViolationsByStudent(Number(student.id))
+        const unresolvedViolations = violations.filter(
+          v => v.status !== 'Resolved' && v.status !== 'Appealed'
+        )
+
+        // Check for unresolved incidents (where student is the reporter)
+        const allIncidents = await listIncidents()
+        const studentLRN = student.lrn
+        const unresolvedIncidents = allIncidents.filter(
+          (inc: IncidentDTO) => {
+            const isReporter = inc.reportedByLRN === studentLRN || 
+                              inc.reportedBy?.toLowerCase().includes(student.firstName?.toLowerCase() || '') ||
+                              inc.reportedBy?.toLowerCase().includes(student.lastName?.toLowerCase() || '')
+            return isReporter && inc.status !== 'Resolved' && inc.status !== 'Dismissed'
+          }
+        )
+
+        setHasUnresolvedIssues(unresolvedViolations.length > 0 || unresolvedIncidents.length > 0)
+      } catch (error) {
+        console.error('Error checking unresolved issues:', error)
+        // On error, allow printing (fail open)
+        setHasUnresolvedIssues(false)
+      } finally {
+        setCheckingIssues(false)
+      }
+    })()
   }, [open, student])
 
   const handleInputChange = (field: string, value: string) => {
@@ -224,8 +270,15 @@ export function EditStudentDialog({ student, open, onOpenChange, onStudentUpdate
     setShowDroppingFormDialog(true)
   }
 
-  const handleStudentDrop = (droppedStudent: any) => {
-    onStudentUpdate(droppedStudent)
+  const handleStudentDrop = async (droppedStudent: any) => {
+    // Refresh the student data from backend to ensure control number is included
+    try {
+      const { getStudent } = await import('../lib/api.students')
+      const refreshed = await getStudent(Number(student.id))
+      onStudentUpdate(refreshed || droppedStudent)
+    } catch {
+      onStudentUpdate(droppedStudent)
+    }
   }
 
   const handlePrintGoodMoral = () => {
@@ -621,16 +674,33 @@ export function EditStudentDialog({ student, open, onOpenChange, onStudentUpdate
           </Tabs>
 
           <div className="space-y-4 pt-6 border-t">
+            {/* Warning message at top center */}
+            {hasUnresolvedIssues && (
+              <div className="flex justify-center">
+                <Alert variant="destructive" className="w-full max-w-2xl flex flex-col items-center justify-center text-center">
+                  <div className="flex justify-center mb-2">
+                    <AlertTriangle className="h-6 w-6" />
+                  </div>
+                  <AlertDescription className="text-center">
+                    This student has unresolved violations or incidents. A Certificate of Good Moral Character cannot be issued until all issues are resolved.
+                  </AlertDescription>
+                </Alert>
+              </div>
+            )}
+            
             {/* Action buttons row 1 */}
             <div className="flex gap-3">
-              <Button 
-                variant="outline" 
-                className="flex-1 gap-2"
-                onClick={handlePrintGoodMoral}
-              >
-                <FileText className="h-4 w-4" />
-                Print Good Moral
-              </Button>
+              {!hasUnresolvedIssues && (
+                <Button 
+                  variant="outline" 
+                  className="flex-1 gap-2"
+                  onClick={handlePrintGoodMoral}
+                  disabled={checkingIssues}
+                >
+                  <FileText className="h-4 w-4" />
+                  Print Good Moral
+                </Button>
+              )}
               <Button 
                 variant="outline" 
                 className="flex-1 gap-2"

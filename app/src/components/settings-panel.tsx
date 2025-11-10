@@ -3,15 +3,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Label } from './ui/label'
 import { Input } from './ui/input'
+import { Textarea } from './ui/textarea'
 import { Separator } from './ui/separator'
 import { Switch } from './ui/switch'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from './ui/dialog'
 import { useTheme } from './theme-provider'
-import { Palette, Bell, Shield, Database, User, Lock, Save, LogOut } from 'lucide-react'
+import { Palette, Bell, Shield, Database, User, Lock, Save, LogOut, Printer, RefreshCw, MessageSquare, Paperclip, Send, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { meByEmail, updateUser, UserDTO } from '../lib/api.users'
 import { getPreferences, updatePreferences } from '../lib/api.preferences'
+import { API_URL } from '../lib/http'
 
 export function SettingsPanel() {
   const { theme, setTheme } = useTheme()
@@ -40,6 +42,11 @@ export function SettingsPanel() {
   const [backupPath, setBackupPath] = useState('')
   const [isCheckingDb, setIsCheckingDb] = useState(false)
   
+  // Printer state
+  const [availablePrinters, setAvailablePrinters] = useState<Array<{ name: string; displayName: string; description: string; status: string }>>([])
+  const [selectedPrinter, setSelectedPrinter] = useState<string>('')
+  const [isLoadingPrinters, setIsLoadingPrinters] = useState(false)
+  
   // Password state
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
@@ -47,9 +54,72 @@ export function SettingsPanel() {
     confirmPassword: ''
   })
 
+  // Feedback state
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false)
+  const [feedbackTitle, setFeedbackTitle] = useState('')
+  const [feedbackDescription, setFeedbackDescription] = useState('')
+  const [feedbackFiles, setFeedbackFiles] = useState<File[]>([])
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false)
+
   const handleLogout = () => {
     localStorage.removeItem('gomis_current_user')
     window.location.reload()
+  }
+
+  const resetFeedbackForm = () => {
+    setFeedbackTitle('')
+    setFeedbackDescription('')
+    setFeedbackFiles([])
+  }
+
+  const handleFeedbackDialogChange = (open: boolean) => {
+    setFeedbackDialogOpen(open)
+    if (!open && !isSubmittingFeedback) {
+      resetFeedbackForm()
+    }
+  }
+
+  const handleFeedbackFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : []
+    setFeedbackFiles(files)
+  }
+
+  const handleFeedbackSubmit = async () => {
+    if (!feedbackTitle.trim() || !feedbackDescription.trim()) {
+      toast.error('Please provide both a title and description for your feedback.')
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('title', feedbackTitle.trim())
+    formData.append('description', feedbackDescription.trim())
+    if (profileData.email) {
+      formData.append('senderEmail', profileData.email)
+    }
+    feedbackFiles.forEach((file) => {
+      formData.append('attachments', file, file.name)
+    })
+
+    setIsSubmittingFeedback(true)
+    try {
+      const response = await fetch(`${API_URL}/api/feedback`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(errorText || 'Failed to submit feedback.')
+      }
+
+      toast.success('Feedback sent successfully. Thank you!')
+      resetFeedbackForm()
+      setFeedbackDialogOpen(false)
+    } catch (error) {
+      console.error(error)
+      toast.error('Failed to send feedback. Please try again.')
+    } finally {
+      setIsSubmittingFeedback(false)
+    }
   }
 
   const themeOptions = [
@@ -78,7 +148,13 @@ export function SettingsPanel() {
           })
           try {
             const prefs = await getPreferences(fresh.id)
-            if (prefs.theme) setTheme(prefs.theme as any)
+            // Load theme from localStorage first (set by ThemeProvider), then sync from backend if different
+            const savedTheme = localStorage.getItem('gomis_theme')
+            if (savedTheme && ['default', 'dark', 'scaled', 'mono'].includes(savedTheme)) {
+              setTheme(savedTheme as any)
+            } else if (prefs.theme) {
+              setTheme(prefs.theme as any)
+            }
             if (typeof prefs.twoFactorEnabled === 'boolean') setTwoFactorEnabled(prefs.twoFactorEnabled)
             if (prefs.backupPath) setBackupPath(prefs.backupPath)
             if (prefs.retentionType) setRetentionType(prefs.retentionType as any)
@@ -98,7 +174,12 @@ export function SettingsPanel() {
       const settings = localStorage.getItem('gomis_settings')
       if (settings) {
         const parsed = JSON.parse(settings)
-        setDbConfig(parsed.dbConfig || '')
+        setDbConfig(parsed.dbConfig || 'http://localhost:5000')
+        setBackupPath(parsed.backupPath || '')
+        if (parsed.retentionType) setRetentionType(parsed.retentionType)
+        if (parsed.retentionValue) setRetentionValue(parsed.retentionValue)
+      } else {
+        setDbConfig('http://localhost:5000')
       }
     }
     init()
@@ -217,13 +298,58 @@ export function SettingsPanel() {
   const handleSaveSettings = async () => {
     if (currentUserId) {
       await updatePreferences(currentUserId, {
+        theme: theme, // Save theme to backend preferences
         backupPath,
         retentionType: retentionType as any,
         retentionValue,
       })
     }
+    
+    // Save printer preference if in Electron
+    if (typeof window !== 'undefined' && (window as any).electronAPI && selectedPrinter) {
+      await (window as any).electronAPI.savePrinter(selectedPrinter)
+    }
+    
+    // Persist locally
+    const local = JSON.parse(localStorage.getItem('gomis_settings') || '{}')
+    local.dbConfig = dbConfig
+    local.backupPath = backupPath
+    local.retentionType = retentionType
+    local.retentionValue = retentionValue
+    localStorage.setItem('gomis_settings', JSON.stringify(local))
+
     toast.success('Settings saved successfully!')
   }
+
+  // Load printers and saved printer preference
+  const loadPrinters = async () => {
+    if (typeof window !== 'undefined' && (window as any).electronAPI) {
+      setIsLoadingPrinters(true)
+      try {
+        const printers = await (window as any).electronAPI.getPrinters()
+        setAvailablePrinters(printers || [])
+        
+        // Load saved printer
+        const saved = await (window as any).electronAPI.getSavedPrinter()
+        if (saved.printer) {
+          setSelectedPrinter(saved.printer)
+        } else if (printers && printers.length > 0) {
+          // Use first printer as default if none saved
+          setSelectedPrinter(printers[0].name)
+        }
+      } catch (error) {
+        console.error('Error loading printers:', error)
+        toast.error('Failed to load printers')
+      } finally {
+        setIsLoadingPrinters(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    // Load printers when component mounts (only in Electron)
+    loadPrinters()
+  }, [])
 
   const handleCheckDatabase = async () => {
     try {
@@ -241,12 +367,107 @@ export function SettingsPanel() {
     }
   }
 
+  // Open feedback dialog when triggered from the sidebar
+  useEffect(() => {
+    const openListener = () => {
+      setFeedbackDialogOpen(true)
+    }
+    window.addEventListener('gomis:open-feedback-dialog', openListener as EventListener)
+    return () => {
+      window.removeEventListener('gomis:open-feedback-dialog', openListener as EventListener)
+    }
+  }, [])
+
   return (
     <div className="p-6 space-y-6">
       <div className="animate-slide-in-top">
         <h1>Settings</h1>
         <p className="text-muted-foreground">Customize your guidance office management experience</p>
       </div>
+
+      <Dialog open={feedbackDialogOpen} onOpenChange={handleFeedbackDialogChange}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send Feedback Report</DialogTitle>
+            <DialogDescription>
+              Share issues, suggestions, or improvement ideas with Jimboy Tongao. You can include attachments such as screenshots or documents.
+              This report ticket will automatically sent to aczontongao@gmail.com.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="feedback-title">Title *</Label>
+              <Input
+                id="feedback-title"
+                placeholder="Brief summary of your feedback"
+                value={feedbackTitle}
+                onChange={(event) => setFeedbackTitle(event.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="feedback-description">Description *</Label>
+              <Textarea
+                id="feedback-description"
+                placeholder="Provide detailed information about your feedback..."
+                value={feedbackDescription}
+                onChange={(event) => setFeedbackDescription(event.target.value)}
+                rows={6}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="feedback-attachments" className="flex items-center gap-2">
+                <Paperclip className="h-4 w-4" />
+                Attachments (optional)
+              </Label>
+              <Input
+                id="feedback-attachments"
+                type="file"
+                multiple
+                onChange={handleFeedbackFileChange}
+              />
+              {feedbackFiles.length > 0 && (
+                <ul className="text-sm text-muted-foreground space-y-1">
+                  {feedbackFiles.map((file, index) => (
+                    <li key={`${file.name}-${index}`}>
+                      {file.name} • {(file.size / 1024).toFixed(1)} KB
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleFeedbackDialogChange(false)}
+              disabled={isSubmittingFeedback}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={handleFeedbackSubmit}
+              disabled={isSubmittingFeedback}
+              className="gap-2"
+            >
+              {isSubmittingFeedback ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>
+                  <Send className="h-4 w-4" />
+                  Send Feedback
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-6 animate-stagger">
         {/* Profile Edit */}
@@ -329,7 +550,10 @@ export function SettingsPanel() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="theme-select">Theme</Label>
-              <Select value={theme} onValueChange={(value: any) => setTheme(value)}>
+              <Select value={theme} onValueChange={(value: any) => {
+                setTheme(value)
+                // Theme is automatically saved by ThemeProvider
+              }}>
                 <SelectTrigger id="theme-select">
                   <SelectValue placeholder="Select a theme" />
                 </SelectTrigger>
@@ -344,9 +568,83 @@ export function SettingsPanel() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">Theme preference is saved automatically</p>
             </div>
           </CardContent>
         </Card>
+
+        {/* Printer Settings */}
+        {typeof window !== 'undefined' && (window as any).electronAPI && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Printer className="h-5 w-5" />
+                Printer Settings
+              </CardTitle>
+              <CardDescription>Select your default printer for document printing</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between mb-4">
+                <div className="space-y-0.5">
+                  <Label>Available Printers</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {availablePrinters.length > 0 
+                      ? `${availablePrinters.length} printer(s) found`
+                      : 'No printers detected'}
+                  </p>
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={loadPrinters}
+                  disabled={isLoadingPrinters}
+                  className="gap-2"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isLoadingPrinters ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+              {isLoadingPrinters ? (
+                <div className="text-sm text-muted-foreground">Scanning for printers...</div>
+              ) : availablePrinters.length > 0 ? (
+                <div className="space-y-2">
+                  <Label htmlFor="printer-select">Select Printer</Label>
+                  <Select value={selectedPrinter} onValueChange={setSelectedPrinter}>
+                    <SelectTrigger id="printer-select">
+                      <SelectValue placeholder="Select a printer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availablePrinters.map((printer) => (
+                        <SelectItem key={printer.name} value={printer.name}>
+                          <div className="flex flex-col">
+                            <span>{printer.displayName}</span>
+                            {printer.description && (
+                              <span className="text-xs text-muted-foreground">{printer.description}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {selectedPrinter && (
+                    <p className="text-xs text-muted-foreground">
+                      Selected: <span className="font-medium">{selectedPrinter}</span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  No printers found. Please ensure your printer is connected and try refreshing.
+                </div>
+              )}
+              <Separator />
+              <Button onClick={handleSaveSettings} className="gap-2">
+                <Save className="h-4 w-4" />
+                Save Printer Settings
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Notifications */}
         <Card>
@@ -453,24 +751,43 @@ export function SettingsPanel() {
             </div>
             <Separator />
             <div className="space-y-2">
-              <Label htmlFor="db-config">Database Configuration</Label>
+              <Label htmlFor="db-config">Database Base URL</Label>
               <Input
                 id="db-config"
-                placeholder="e.g., mongodb://localhost:27017/gomisdb"
+                placeholder="http://localhost:5000"
                 value={dbConfig}
                 onChange={(e) => setDbConfig(e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Enter your database connection string</p>
+              <p className="text-xs text-muted-foreground">Default is http://localhost:5000</p>
             </div>
             <Separator />
             <div className="space-y-2">
               <Label htmlFor="backup-path">Backup Directory Path</Label>
-              <Input
-                id="backup-path"
-                placeholder="e.g., /backups/gomis"
-                value={backupPath}
-                onChange={(e) => setBackupPath(e.target.value)}
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="backup-path"
+                  placeholder="Select a folder for backups"
+                  value={backupPath}
+                  onChange={(e) => setBackupPath(e.target.value)}
+                  className="flex-1"
+                />
+                {typeof window !== 'undefined' && (window as any).electronAPI && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        const result = await (window as any).electronAPI.selectDirectory()
+                        if (!result?.canceled && result?.path) {
+                          setBackupPath(result.path)
+                        }
+                      } catch {}
+                    }}
+                  >
+                    Browse…
+                  </Button>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">Specify the directory for backup files</p>
             </div>
             <Separator />
@@ -497,6 +814,7 @@ export function SettingsPanel() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="days">Days</SelectItem>
                     <SelectItem value="months">Months</SelectItem>
                     <SelectItem value="years">Years</SelectItem>
                   </SelectContent>
